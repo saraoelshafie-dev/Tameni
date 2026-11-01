@@ -1,19 +1,31 @@
 workflows:
   android-workflow:
-    name: Android APK
+    name: Ghaith APK
+    instance_type: mac_mini_m1
     max_build_duration: 60
-    instance_type: mac_mini_m2
     environment:
-      flutter: stable
+      flutter: 3.24.0
+      xcode: latest
+      cocoapods: default
     scripts:
-      - name: Create Android folder
+      - name: Set up Flutter
         script: |
-          flutter create . --platforms=android
+          flutter --version
       - name: Get dependencies
         script: |
           flutter pub get
+      - name: Create Android folder
+        script: |
+          flutter create . --platforms=android --project-name ghaith
+          # Add desugaring fix
+          echo "Adding desugaring..."
+          sed -i '' 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/' android/app/build.gradle || sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/' android/app/build.gradle
       - name: Build APK
         script: |
-          flutter build apk --release
+          flutter build apk --release --no-tree-shake-icons
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
+    publishing:
+      email:
+        recipients:
+          - sara@example.com
