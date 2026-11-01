@@ -4,7 +4,7 @@ workflows:
     instance_type: mac_mini_m1
     max_build_duration: 60
     environment:
-      flutter: 3.22.3
+      flutter: 3.24.0
       xcode: latest
       cocoapods: default
     scripts:
@@ -13,18 +13,10 @@ workflows:
           flutter clean
           rm -rf pubspec.lock
           rm -rf .dart_tool
-      - name: Create Android folder
+          rm -rf android
+      - name: Create fresh Android
         script: |
           flutter create . --platforms=android --project-name ghaith --org dev.sara
-      - name: Fix Kotlin version - MOST IMPORTANT
-        script: |
-          # Fix Kotlin version to 1.9.22
-          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '\''1.9.22'\''/' android/build.gradle
-          sed -i 's/id "org.jetbrains.kotlin.android" version ".*" apply false/id "org.jetbrains.kotlin.android" version "1.9.22" apply false/' android/settings.gradle
-          echo "=== build.gradle ==="
-          cat android/build.gradle
-          echo "=== settings.gradle ==="
-          cat android/settings.gradle
       - name: Get dependencies
         script: |
           flutter pub get
