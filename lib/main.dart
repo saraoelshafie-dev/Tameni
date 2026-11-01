@@ -1,100 +1,113 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:share_plus/share_plus.dart';
 
-void main() {
-  runApp(TameniApp());
+final FlutterLocalNotificationsPlugin notificationsPlugin = FlutterLocalNotificationsPlugin();
+
+Map<String, Map<String,String>> L = {
+  'ar': {'appName': 'غيث - Ghaith','safe': 'انتي في أمان','sos': 'زر الاستغاثة SOS','sosHint': 'اضغطي مطولا لإرسال نداء فوري','services': 'الخدمات والأدوات','trusted': 'جهات الاتصال الموثوقة','scheduled': 'مؤقت تسجيل الوصول','inactivity': 'مراقبة الخمول','fakeCall': 'مكالمة مزيفة','shareTrip': 'مشاركة الرحلة','tips': 'نصائح السلامة','meds': 'أدويتي','appearance': 'المظهر واللغة','settings': 'الإعدادات',},
+  'en': {'appName': 'Ghaith','safe': 'You are safe','sos': 'SOS Emergency','sosHint': 'Long press to send instant alert','services': 'Services & Tools','trusted': 'Trusted Contacts','scheduled': 'Scheduled Check-in','inactivity': 'Inactivity Monitor','fakeCall': 'Fake Call','shareTrip': 'Share Trip','tips': 'Safety Tips','meds': 'My Medications','appearance': 'Appearance & Language','settings': 'Settings',}
+};
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initSettings = InitializationSettings(android: androidSettings);
+  await notificationsPlugin.initialize(initSettings);
+  runApp(const GhaithApp());
 }
 
-class TameniApp extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'طمني',
-      theme: ThemeData(
-        primarySwatch: Colors.pink,
-        fontFamily: 'Cairo',
-      ),
-      home: HomeScreen(),
-    );
+class GhaithApp extends StatefulWidget { const GhaithApp({super.key}); @override State<GhaithApp> createState() => _GhaithAppState(); }
+class _GhaithAppState extends State<GhaithApp> {
+  String lang = 'ar'; String themeColor = 'pink'; bool isDark = false;
+  @override void initState(){ super.initState(); _loadPrefs(); }
+  Future<void> _loadPrefs() async { final p = await SharedPreferences.getInstance(); setState((){ lang = p.getString('lang') ?? 'ar'; themeColor = p.getString('theme_color') ?? 'pink'; isDark = p.getBool('is_dark') ?? false; }); }
+  Color getPrimary(){ switch(themeColor){ case 'purple': return const Color(0xFF7C4DFF); case 'teal': return const Color(0xFF009688); case 'red': return const Color(0xFFD32F2F); default: return const Color(0xFFE91E63); } }
+  @override Widget build(BuildContext context){
+    return MaterialApp(debugShowCheckedModeBanner: false, theme: ThemeData(primaryColor: getPrimary(), brightness: isDark ? Brightness.dark : Brightness.light, scaffoldBackgroundColor: isDark ? const Color(0xFF121212) : const Color(0xFFFFF0F5), useMaterial3: true), home: HomeScreen(lang: lang, themeColor: themeColor, isDark: isDark, onThemeChanged: (c,d,l) async { setState((){ themeColor=c; isDark=d; lang=l; }); final p = await SharedPreferences.getInstance(); await p.setString('theme_color', c); await p.setBool('is_dark', d); await p.setString('lang', l); },),);
   }
 }
 
-class HomeScreen extends StatefulWidget {
-  @override
-  _HomeScreenState createState() => _HomeScreenState();
-}
-
+class HomeScreen extends StatefulWidget { final String lang; final String themeColor; final bool isDark; final Function(String,bool,String) onThemeChanged; const HomeScreen({super.key, required this.lang, required this.themeColor, required this.isDark, required this.onThemeChanged}); @override State<HomeScreen> createState() => _HomeScreenState(); }
 class _HomeScreenState extends State<HomeScreen> {
-  String emergencyNumber = "122";
-
-  @override
-  void initState() {
-    super.initState();
-    loadNumber();
+  List<String> contacts = []; List<Map<String,dynamic>> meds = [];
+  @override void initState(){ super.initState(); _loadData(); }
+  Future<void> _loadData() async { final p = await SharedPreferences.getInstance(); setState((){ contacts = p.getStringList('trusted_contacts') ?? []; String medsJson = p.getString('meds') ?? '[]'; meds = List<Map<String,dynamic>>.from(jsonDecode(medsJson)); }); }
+  Color getPrimary(){ switch(widget.themeColor){ case 'purple': return const Color(0xFF7C4DFF); case 'teal': return const Color(0xFF009688); case 'red': return const Color(0xFFD32F2F); default: return const Color(0xFFE91E63); } }
+  String t(String key){ return L[widget.lang]?[key] ?? key; }
+  Future<Position?> _getLocation() async { try { if (!await Geolocator.isLocationServiceEnabled()) return null; var perm = await Geolocator.checkPermission(); if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission(); if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return null; return await Geolocator.getCurrentPosition(); } catch(e){ return null; } }
+  Future<void> _sendSOS() async {
+    final p = await SharedPreferences.getInstance();
+    List<String> trusted = p.getStringList('trusted_contacts') ?? [];
+    bool sendSMS = p.getBool('send_sms') ?? true;
+    bool sendWA = p.getBool('send_whatsapp') ?? true;
+    bool sendMessenger = p.getBool('send_messenger') ?? false;
+    String customMsg = p.getString('custom_message') ?? (widget.lang=='ar' ? 'غيث - ساعدوني! تنبيه طوارئ. موقعي:' : 'Ghaith - Help! Emergency. My location:');
+    Position? pos = await _getLocation();
+    String link = pos != null ? 'https://www.google.com/maps/search/?api=1&query=${pos.latitude},${pos.longitude}' : 'Location unavailable';
+    String full = '$customMsg\n$link';
+    await p.setString('last_active', DateTime.now().toIso8601String());
+    if(trusted.isEmpty){ final uri = Uri.parse('tel:122'); if (await canLaunchUrl(uri)) await launchUrl(uri); return; }
+    if(sendSMS){ for(var num in trusted){ final sms = Uri.parse('sms:$num?body=${Uri.encodeComponent(full)}'); if (await canLaunchUrl(sms)) await launchUrl(sms); await Future.delayed(const Duration(milliseconds: 500)); } }
+    if(sendWA){ for(var num in trusted){ String cleanNum = num.replaceAll(RegExp(r'[^0-9]'), ''); final waUri = Uri.parse('https://wa.me/$cleanNum?text=${Uri.encodeComponent(full)}'); if (await canLaunchUrl(waUri)){ await launchUrl(waUri, mode: LaunchMode.externalApplication); await Future.delayed(const Duration(seconds: 1)); } } }
+    if(sendMessenger){ await Share.share(full); }
+    if(!mounted) return; ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(widget.lang=='ar' ? 'تم ارسال غيث: SMS + واتساب + ماسنجر ✅' : 'Ghaith alert sent!')));
   }
-
-  loadNumber() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      emergencyNumber = prefs.getString('emergency') ?? "122";
-    });
+  @override Widget build(BuildContext context){
+    final primary = getPrimary();
+    return Scaffold(body: SafeArea(child: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(widget.lang=='ar' ? 'أهلا، غيث' : 'Hi, Ghaith', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: primary)), Text('غيث • ${t('safe')}', style: TextStyle(color: Colors.grey[600], fontSize: 12)),]), CircleAvatar(backgroundColor: primary.withOpacity(0.2), child: Icon(Icons.water_drop, color: primary)),]),
+      const SizedBox(height: 20),
+      GestureDetector(onLongPress: _sendSOS, child: Container(width: double.infinity, padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: primary, borderRadius: BorderRadius.circular(25)), child: Row(children: [Container(padding: const EdgeInsets.all(10), decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle), child: Icon(Icons.shield, color: primary)), const SizedBox(width: 15), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(t('sos'), style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)), Text(t('sosHint'), style: const TextStyle(color: Colors.white70, fontSize: 12)),])), const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 30),]),),),
+      const SizedBox(height: 8), Text(widget.lang=='ar' ? 'طرق الارسال: SMS + واتساب + ماسنجر - اضغطي مطولا' : 'Sends via: SMS + WhatsApp + Messenger - Long press', style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+      const SizedBox(height: 20),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(t('services'), style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: primary)), Text(widget.lang=='ar' ? 'عرض الكل >' : 'View all >', style: TextStyle(color: primary, fontSize: 12)),]),
+      const SizedBox(height: 12),
+      GridView.count(crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), childAspectRatio: 1.1, mainAxisSpacing: 12, crossAxisSpacing: 12, children: [
+        _serviceCard(primary, Icons.people, t('trusted'), '${contacts.length} جهات', () => Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(lang: widget.lang)))),
+        _serviceCard(primary, Icons.access_time, t('scheduled'), 'مفعل - 30 د', () => Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(lang: widget.lang)))),
+        _serviceCard(primary, Icons.shield, t('inactivity'), 'يراقب الآن', () => Navigator.push(context, MaterialPageRoute(builder: (_) => SettingsScreen(lang: widget.lang)))),
+        _serviceCard(primary, Icons.call, t('fakeCall'), 'اضغطي للتشغيل', () async { final p = await SharedPreferences.getInstance(); String name = p.getString('fake_caller_name') ?? 'ماما'; Navigator.push(context, MaterialPageRoute(builder: (_) => FakeCallScreen(callerName: name))); }),
+        _serviceCard(primary, Icons.map, t('shareTrip'), 'مشاركة مباشرة', () async { Position? pos = await _getLocation(); String link = pos != null ? 'https://www.google.com/maps/search/?api=1&query=${pos.latitude},${pos.longitude}' : 'Follow my trip - Ghaith'; await Share.share(link); }),
+        _serviceCard(primary, Icons.lightbulb, t('tips'), '7 نصائح', () => Navigator.push(context, MaterialPageRoute(builder: (_) => TipsScreen(lang: widget.lang)))),
+        _serviceCard(primary, Icons.medication, t('meds'), '${meds.length} أدوية • صوت', () => Navigator.push(context, MaterialPageRoute(builder: (_) => MedsScreen(lang: widget.lang)))),
+        _serviceCard(primary, Icons.palette, t('appearance'), '${widget.themeColor}, ${widget.lang}', () => Navigator.push(context, MaterialPageRoute(builder: (_) => AppearanceScreen(currentColor: widget.themeColor, isDark: widget.isDark, lang: widget.lang, onChanged: widget.onThemeChanged,)))),
+      ],),
+      const SizedBox(height: 20),
+      Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: primary.withOpacity(0.2))), child: Row(children: [Icon(Icons.settings, color: primary), const SizedBox(width: 10), Text(t('settings'), style: TextStyle(fontWeight: FontWeight.bold, color: primary)), const Spacer(), const Icon(Icons.arrow_forward_ios, size: 12),]),),
+    ],),),),);
   }
-
-  makeCall() async {
-    final Uri url = Uri(scheme: 'tel', path: emergencyNumber);
-    if (await canLaunchUrl(url)) {
-      await launchUrl(url);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Color(0xFFFFF0F3),
-      appBar: AppBar(
-        backgroundColor: Color(0xFFE91E63),
-        title: Text('طمني - Tameni', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        centerTitle: true,
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.shield, size: 120, color: Color(0xFFE91E63)),
-            SizedBox(height: 20),
-            Text('انتي في أمان', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Color(0xFFE91E63))),
-            SizedBox(height: 10),
-            Text('اضغطي للطوارئ', style: TextStyle(fontSize: 18, color: Colors.grey[700])),
-            SizedBox(height: 50),
-            GestureDetector(
-              onTap: makeCall,
-              child: Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  color: Color(0xFFE91E63),
-                  shape: BoxShape.circle,
-                  boxShadow: [BoxShadow(color: Colors.pink.withOpacity(0.4), blurRadius: 20, spreadRadius: 5)],
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.phone, color: Colors.white, size: 50),
-                      SizedBox(height: 10),
-                      Text('SOS', style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(height: 50),
-            Text('رقم الطوارئ: $emergencyNumber', style: TextStyle(fontSize: 16)),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget _serviceCard(Color primary, IconData icon, String title, String subtitle, VoidCallback onTap){ return GestureDetector(onTap: onTap, child: Container(decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 8)]), child: Column(children: [Expanded(child: Container(width: double.infinity, decoration: BoxDecoration(color: primary.withOpacity(0.15), borderRadius: const BorderRadius.vertical(top: Radius.circular(16))), child: Icon(icon, color: primary, size: 36))), Padding(padding: const EdgeInsets.all(8), child: Column(children: [Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), textAlign: TextAlign.center), const SizedBox(height: 2), Text(subtitle, style: TextStyle(fontSize: 10, color: Colors.grey[600]), textAlign: TextAlign.center),])),]),),); }
 }
+
+class AppearanceScreen extends StatefulWidget { final String currentColor; final bool isDark; final String lang; final Function(String,bool,String) onChanged; const AppearanceScreen({super.key, required this.currentColor, required this.isDark, required this.lang, required this.onChanged}); @override State<AppearanceScreen> createState() => _AppearanceScreenState(); }
+class _AppearanceScreenState extends State<AppearanceScreen> { late String color; late bool dark; late String lang; @override void initState(){ super.initState(); color=widget.currentColor; dark=widget.isDark; lang=widget.lang; } @override Widget build(BuildContext context){ return Scaffold(appBar: AppBar(title: Text(lang=='ar' ? 'غيث - المظهر واللغة' : 'Ghaith - Appearance'), backgroundColor: const Color(0xFFE91E63)), body: ListView(padding: const EdgeInsets.all(16), children: [Text(lang=='ar' ? 'اختاري اللون (4 الوان)' : 'Choose Theme Color', style: const TextStyle(fontWeight: FontWeight.bold)), const SizedBox(height: 10), Row(children: [_colorDot('pink', const Color(0xFFE91E63)), _colorDot('purple', const Color(0xFF7C4DFF)), _colorDot('teal', const Color(0xFF009688)), _colorDot('red', const Color(0xFFD32F2F)),]), const Divider(height: 30), SwitchListTile(title: Text(lang=='ar' ? 'الوضع الداكن' : 'Dark Mode'), value: dark, onChanged: (v){ setState(()=>dark=v); widget.onChanged(color,dark,lang); }), const Divider(height: 30), Text(lang=='ar' ? 'اللغة' : 'Language', style: const TextStyle(fontWeight: FontWeight.bold)), RadioListTile(value: 'ar', groupValue: lang, title: const Text('العربية - غيث'), onChanged: (v){ setState(()=>lang=v!); widget.onChanged(color,dark,lang); }), RadioListTile(value: 'en', groupValue: lang, title: const Text('English - Ghaith'), onChanged: (v){ setState(()=>lang=v!); widget.onChanged(color,dark,lang); }),]),); } Widget _colorDot(String name, Color c){ bool selected = color==name; return GestureDetector(onTap: (){ setState(()=>color=name); widget.onChanged(color,dark,lang); }, child: Container(margin: const EdgeInsets.only(right: 12), width: 50, height: 50, decoration: BoxDecoration(color: c, shape: BoxShape.circle, border: selected ? Border.all(color: Colors.black, width: 3) : null)),); } }
+
+class MedsScreen extends StatefulWidget { final String lang; const MedsScreen({super.key, required this.lang}); @override State<MedsScreen> createState() => _MedsScreenState(); }
+class _MedsScreenState extends State<MedsScreen> {
+  List<Map<String,dynamic>> meds = [];
+  @override void initState(){ super.initState(); _load(); }
+  Future<void> _load() async { final p = await SharedPreferences.getInstance(); String jsonStr = p.getString('meds') ?? '[]'; setState(()=> meds = List<Map<String,dynamic>>.from(jsonDecode(jsonStr))); }
+  Future<void> _save() async { final p = await SharedPreferences.getInstance(); await p.setString('meds', jsonEncode(meds)); setState((){}); }
+  Future<void> _scheduleMed(String name, TimeOfDay time) async { const AndroidNotificationDetails androidDetails = AndroidNotificationDetails('meds_channel', 'غيث - تذكير الأدوية', importance: Importance.max, priority: Priority.high, playSound: true, enableVibration: true,); const NotificationDetails details = NotificationDetails(android: androidDetails); await notificationsPlugin.show(DateTime.now().millisecond, widget.lang=='ar' ? '💊 غيث - ميعاد الدواء' : '💊 Ghaith - Medication Time', widget.lang=='ar' ? 'ميعاد دواء $name الآن - تنبيه بصوت' : 'Time for $name now - Sound Alert', details,); }
+  void _addMedDialog(){ String name=''; String dose=''; TimeOfDay time = TimeOfDay.now(); showDialog(context: context, builder: (_) => StatefulBuilder(builder: (context, setS)=> AlertDialog(title: Text(widget.lang=='ar' ? 'إضافة دواء - غيث' : 'Add Med - Ghaith'), content: Column(mainAxisSize: MainAxisSize.min, children: [TextField(decoration: InputDecoration(labelText: widget.lang=='ar' ? 'اسم الدواء' : 'Medicine name'), onChanged: (v)=>name=v), TextField(decoration: InputDecoration(labelText: widget.lang=='ar' ? 'الجرعة' : 'Dose'), onChanged: (v)=>dose=v), ListTile(title: Text('${widget.lang=='ar' ? 'الوقت' : 'Time'}: ${time.format(context)}'), trailing: const Icon(Icons.access_time), onTap: () async { TimeOfDay? t = await showTimePicker(context: context, initialTime: time); if(t!=null) setS(()=>time=t); }),]), actions: [TextButton(onPressed: ()=>Navigator.pop(context), child: Text(widget.lang=='ar' ? 'إلغاء' : 'Cancel')), ElevatedButton(onPressed: (){ if(name.isNotEmpty){ meds.add({'name':name,'dose':dose,'hour':time.hour,'minute':time.minute,'taken':false}); _save(); _scheduleMed(name, time); Navigator.pop(context); } }, child: Text(widget.lang=='ar' ? 'حفظ + تنبيه بصوت 🔊' : 'Save + Sound 🔊')),],))); }
+  @override Widget build(BuildContext context){ return Scaffold(appBar: AppBar(title: Text(widget.lang=='ar' ? 'أدويتي - غيث 💊' : 'My Meds - Ghaith 💊'), backgroundColor: const Color(0xFFE91E63), foregroundColor: Colors.white), body: meds.isEmpty ? Center(child: Text(widget.lang=='ar' ? 'لا توجد أدوية - اضيفي أول دواء' : 'No meds - add first one')) : ListView.builder(padding: const EdgeInsets.all(16), itemCount: meds.length, itemBuilder: (_, i){ var m = meds[i]; return Card(child: ListTile(leading: const Icon(Icons.medication, color: Color(0xFFE91E63)), title: Text('${m['name']} - ${m['dose']}'), subtitle: Text('${m['hour']}:${m['minute'].toString().padLeft(2,'0')} - ${widget.lang=='ar' ? 'تنبيه بصوت' : 'Sound alert'}'), trailing: Row(mainAxisSize: MainAxisSize.min, children: [IconButton(icon: Icon(m['taken'] ? Icons.check_circle : Icons.circle_outlined, color: Colors.green), onPressed: (){ setState(()=>m['taken']=!m['taken']); _save(); }), IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: (){ meds.removeAt(i); _save(); }),]),)); },), floatingActionButton: FloatingActionButton(backgroundColor: const Color(0xFFE91E63), onPressed: _addMedDialog, child: const Icon(Icons.add, color: Colors.white)),); }
+}
+
+class SettingsScreen extends StatefulWidget { final String lang; const SettingsScreen({super.key, required this.lang}); @override State<SettingsScreen> createState() => _SettingsScreenState(); }
+class _SettingsScreenState extends State<SettingsScreen> {
+  List<String> contacts=[]; bool scheduledEnabled=false; bool inactivityEnabled=false; int responseMinutes=10; int inactivityHours=12; String fakeCaller='ماما'; int fakeDelay=5; bool sendSMS=true; bool sendWA=true; bool sendMessenger=false;
+  final TextEditingController _contactCtrl = TextEditingController(); final TextEditingController _msgCtrl = TextEditingController(text: 'غيث - ساعدوني! لم ارد على تنبيه الامان. موقعي:');
+  @override void initState(){ super.initState(); _load(); }
+  Future<void> _load() async { final p = await SharedPreferences.getInstance(); setState((){ contacts = p.getStringList('trusted_contacts') ?? []; scheduledEnabled = p.getBool('scheduled_enabled') ?? false; inactivityEnabled = p.getBool('inactivity_enabled') ?? false; responseMinutes = p.getInt('response_minutes') ?? 10; inactivityHours = p.getInt('inactivity_hours') ?? 12; fakeCaller = p.getString('fake_caller_name') ?? 'ماما'; fakeDelay = p.getInt('fake_delay') ?? 5; sendSMS = p.getBool('send_sms') ?? true; sendWA = p.getBool('send_whatsapp') ?? true; sendMessenger = p.getBool('send_messenger') ?? false; _msgCtrl.text = p.getString('custom_message') ?? _msgCtrl.text; }); }
+  Future<void> _save() async { final p = await SharedPreferences.getInstance(); await p.setStringList('trusted_contacts', contacts); await p.setBool('scheduled_enabled', scheduledEnabled); await p.setBool('inactivity_enabled', inactivityEnabled); await p.setInt('response_minutes', responseMinutes); await p.setInt('inactivity_hours', inactivityHours); await p.setString('custom_message', _msgCtrl.text); await p.setString('fake_caller_name', fakeCaller); await p.setInt('fake_delay', fakeDelay); await p.setBool('send_sms', sendSMS); await p.setBool('send_whatsapp', sendWA); await p.setBool('send_messenger', sendMessenger); }
+  @override Widget build(BuildContext context){ return Scaffold(appBar: AppBar(title: Text(widget.lang=='ar' ? 'غيث - الاعدادات المتقدمة' : 'Ghaith - Advanced Settings'), backgroundColor: const Color(0xFFE91E63)), body: ListView(padding: const EdgeInsets.all(16), children: [Text(widget.lang=='ar' ? 'ارقامي الموثوقة (حتى 5) - غيث' : 'Ghaith - Trusted Contacts', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFE91E63))), Row(children: [Expanded(child: TextField(controller: _contactCtrl, decoration: const InputDecoration(hintText: '01xxxxxxxxx', border: OutlineInputBorder()))), const SizedBox(width: 8), ElevatedButton(onPressed: (){ if(_contactCtrl.text.isNotEmpty && contacts.length<5){ setState((){ contacts.add(_contactCtrl.text); _contactCtrl.clear(); }); } }, child: Text(widget.lang=='ar' ? 'إضافة' : 'Add'))]), ...contacts.map((c)=>ListTile(title: Text(c), trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: ()=>setState(()=>contacts.remove(c))))), const Divider(), Text(widget.lang=='ar' ? 'طرق ارسال الطوارئ - اختاري' : 'Emergency Sending Methods', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFE91E63))), CheckboxListTile(title: const Text('SMS (أوتوماتيك 100%)'), value: sendSMS, onChanged: (v)=>setState(()=>sendSMS=v!)), CheckboxListTile(title: const Text('WhatsApp 💚 (يفتح واتساب جاهز)'), value: sendWA, onChanged: (v)=>setState(()=>sendWA=v!)), CheckboxListTile(title: const Text('Messenger 💙 (يفتح ماسنجر + مشاركة)'), value: sendMessenger, onChanged: (v)=>setState(()=>sendMessenger=v!)), const Divider(), SwitchListTile(title: Text(widget.lang=='ar' ? 'تفعيل السؤال اليومي - غيث' : 'Enable Daily Check - Ghaith'), value: scheduledEnabled, onChanged: (v)=>setState(()=>scheduledEnabled=v)), if(scheduledEnabled) Column(children: [Text('${widget.lang=='ar' ? 'مهلة الرد' : 'Response'}: $responseMinutes min'), Slider(value: responseMinutes.toDouble(), min: 2, max: 30, onChanged: (v)=>setState(()=>responseMinutes=v.toInt()))]), SwitchListTile(title: Text(widget.lang=='ar' ? 'تفعيل مراقبة عدم النشاط' : 'Enable Inactivity Monitor'), value: inactivityEnabled, onChanged: (v)=>setState()=>inactivityEnabled=v)), if(inactivityEnabled) Column(children: [Text('After: $inactivityHours hours'), Slider(value: inactivityHours.toDouble(), min: 1, max: 24, onChanged: (v)=>setState()=>inactivityHours=v.toInt()))]), const SizedBox(height: 10), TextField(controller: _msgCtrl, maxLines: 3, decoration: InputDecoration(labelText: widget.lang=='ar' ? 'نص رسالة غيث التلقائية' : 'Ghaith Auto Message', border: const OutlineInputBorder())), const SizedBox(height: 20), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE91E63), padding: const EdgeInsets.symmetric(vertical: 16)), onPressed: () async { await _save(); if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(widget.lang=='ar' ? 'تم حفظ اعدادات غيث ✅' : 'Ghaith Settings Saved ✅'))); }, child: Text(widget.lang=='ar' ? 'حفظ كل اعدادات غيث ✅' : 'Save All Ghaith Settings ✅', style: const TextStyle(color: Colors.white))),],),); }
+}
+
+class FakeCallScreen extends StatelessWidget { final String callerName; const FakeCallScreen({super.key, required this.callerName}); @override Widget build(BuildContext context){ return Scaffold(backgroundColor: Colors.black, body: Column(mainAxisAlignment: MainAxisAlignment.center, children: [const Icon(Icons.account_circle, size: 120, color: Colors.white), const SizedBox(height: 20), Text(callerName, style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)), const Text('يتصل... - غيث', style: TextStyle(color: Colors.white70, fontSize: 18)), const SizedBox(height: 80), Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [FloatingActionButton(backgroundColor: Colors.red, onPressed: ()=>Navigator.pop(context), child: const Icon(Icons.call_end)), FloatingActionButton(backgroundColor: Colors.green, onPressed: ()=>Navigator.pop(context), child: const Icon(Icons.call))])])); } }
+class TipsScreen extends StatelessWidget { final String lang; const TipsScreen({super.key, required this.lang}); @override Widget build(BuildContext context){ List<String> tipsAr = ['شاركي موقعك دائما مع شخص تثقين به - غيث.', 'احتفظي برقم الطوارئ 122.', 'استخدمي المكالمة الوهمية للخروج من المواقف.']; List<String> tipsEn = ['Always share location - Ghaith.', 'Keep 122 emergency number.', 'Use fake call to exit.']; var tips = lang=='ar' ? tipsAr : tipsEn; return Scaffold(appBar: AppBar(title: Text(lang=='ar' ? 'نصائح غيث' : 'Ghaith Tips'), backgroundColor: const Color(0xFFE91E63)), body: ListView.builder(padding: const EdgeInsets.all(16), itemCount: tips.length, itemBuilder: (_, i)=>Card(child: ListTile(leading: const Icon(Icons.check_circle, color: Color(0xFFE91E63)), title: Text(tips[i]))))); } }
