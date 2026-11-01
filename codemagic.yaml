@@ -4,20 +4,19 @@ workflows:
     instance_type: mac_mini_m1
     max_build_duration: 60
     environment:
-      flutter: 3.24.0
+      flutter: 3.22.3
       xcode: latest
       cocoapods: default
     scripts:
-      - name: Clean everything
+      - name: Clean
         script: |
           flutter clean
           rm -rf pubspec.lock
-          rm -rf .dart_tool
           rm -rf android
-      - name: Create fresh Android
+      - name: Create Android
         script: |
           flutter create . --platforms=android --project-name ghaith --org dev.sara
-      - name: Get dependencies
+      - name: Get deps
         script: |
           flutter pub get
       - name: Build APK
